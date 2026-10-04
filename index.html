@@ -59,6 +59,11 @@ button{cursor:pointer}
 .tabbar{flex:none;display:flex;background:#fff;border-top:1px solid var(--line);padding:6px 6px 22px}
 .tabbar button{flex:1;border:0;background:none;display:flex;flex-direction:column;align-items:center;gap:2px;font-size:11px;color:#9a8f86;padding:6px 0}
 .tabbar button.on{color:var(--accent)}
+.tb-ic{position:relative;display:inline-flex}
+.tbadge{position:absolute;top:-4px;right:-9px;min-width:17px;height:17px;padding:0 4px;border-radius:9px;background:var(--danger);color:#fff;font-size:10.5px;font-style:normal;font-weight:700;display:grid;place-items:center;border:2px solid #fff;box-sizing:content-box}
+.list.req{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.req-row{border-color:var(--accent);background:var(--accent-soft)}
+.linkbtn{border:0;background:none;padding:8px 0 0;font-size:12.5px;font-weight:600;color:var(--muted);text-decoration:underline;text-underline-offset:2px}
 .ic{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 .ic.sm{width:18px;height:18px}
 h3.sec{font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin:18px 2px 8px;font-weight:600;display:flex;justify-content:space-between;align-items:baseline}
@@ -287,9 +292,10 @@ function seed(){
       if (m.stamps[card.id] >= card.goal) {
         m.stamps[card.id] = 0;
         const red = now-ts > 4*DAY && rnd() < .8 ? ts + rnd()*Math.min(10*DAY, now-ts) : null;
-        st.rewards.push({id:uid('r'),store,cust,card:card.id,text:card.reward,earned:ts,redeemed:red});
+        const method = red ? (rnd() < .85 ? 'app' : 'staff') : null;
+        st.rewards.push({id:uid('r'),store,cust,card:card.id,text:card.reward,earned:ts,redeemed:red,method,pending:null});
         st.activity.push({id:uid('a'),store,cust,card:card.id,type:'reward',ts:ts+1});
-        if (red) st.activity.push({id:uid('a'),store,cust,card:card.id,type:'redeem',ts:red});
+        if (red) st.activity.push({id:uid('a'),store,cust,card:card.id,type:'redeem',method,ts:red});
       }
     });
   });
@@ -306,6 +312,10 @@ const member = (store,cust) => S.members.find(m => m.store===store && m.cust===c
 const membersOf = store => S.members.filter(m => m.store===store);
 const storesOf = cust => S.members.filter(m => m.cust===cust).map(m => S.stores[m.store]).filter(Boolean);
 const openRewards = (store,cust) => S.rewards.filter(r => r.store===store && r.cust===cust && !r.redeemed);
+const REDEEM_MS = 10*60e3;
+const pendingOf = store => S.rewards.filter(r => r.store===store && !r.redeemed && r.pending && r.pending.exp > Date.now());
+const mmss = ms => { const s = Math.max(0, Math.ceil(ms/1000)); return Math.floor(s/60) + ':' + String(s%60).padStart(2,'0'); };
+const countdown = r => `<span data-exp="${r.pending.exp}">${mmss(r.pending.exp - Date.now())}</span>`;
 function lastVisit(store,cust){
   let t = 0; for (const a of S.activity) if (a.store===store && a.cust===cust && (a.type==='stamp'||a.type==='join') && a.ts>t) t = a.ts;
   return t;
@@ -366,8 +376,8 @@ function hashFor(){
 const statusbar = () => `<div class="statusbar"><span>9:41</span><span class="notch"></span><span class="sig">●●●● ▮</span></div>`;
 
 function tabbar(tabs, ui){
-  return `<nav class="tabbar">${tabs.map(([id,label,icon]) =>
-    `<button class="${ui.tab===id?'on':''}" data-act="tab" data-tab="${id}">${ic(icon)}<span>${label}</span></button>`).join('')}</nav>`;
+  return `<nav class="tabbar">${tabs.map(([id,label,icon,badge]) =>
+    `<button class="${ui.tab===id?'on':''}" data-act="tab" data-tab="${id}"><span class="tb-ic">${ic(icon)}${badge?`<i class="tbadge">${badge}</i>`:''}</span><span>${label}</span></button>`).join('')}</nav>`;
 }
 function sheetWrap(inner, ui){
   const a = ui.anim ? ' anim' : ''; ui.anim = false;
@@ -403,15 +413,26 @@ function ownerScreen(){
     <header class="app-head"><span class="badge-ava" style="background:${s.soft}">${s.emoji}</span>
       <div class="grow"><div class="ah-title">${esc(s.name)}</div><div class="ah-sub">Owner · ${esc(s.address)}</div></div></header>
     <div class="content">${body}</div>
-    ${tabbar([['dash','Dashboard','home'],['customers','Customers','users'],['cards','Stamp cards','card'],['scan','Scan','scan']], ui)}
+    ${tabbar([['dash','Dashboard','home'],['customers','Customers','users'],['cards','Stamp cards','card'],['scan','Scan','scan',pendingOf(s.id).length]], ui)}
     ${ui.sheet ? sheetWrap(ownerSheet(s, ui.sheet), ui) : ''}`;
+}
+// Path A: requests the customer started in their app, waiting for staff confirmation.
+function requestsPanel(s){
+  const reqs = pendingOf(s.id); if (!reqs.length) return '';
+  return `<h3 class="sec" style="margin-top:4px">Redeem requests <span>customer confirmed in app</span></h3>
+    <div class="list req">${reqs.map(r => { const c = S.customers[r.cust]; if (!c) return '';
+      return `<div class="row">${ava(c)}<div class="grow"><div class="t">${esc(c.name)} · ${esc(r.text)}</div>
+        <div class="s">Code <span class="code">${r.pending.code}</span> · expires in ${countdown(r)}</div></div>
+        <button class="btn primary sm" data-act="confirm-redeem" data-reward="${r.id}">Confirm</button></div>`; }).join('')}</div>`;
 }
 function ownerDash(s){
   const st = stats(s.id), max = Math.max(...st.weeks, 1);
   const feed = S.activity.filter(a => a.store===s.id && a.type!=='join').slice(-6).reverse().map(a => {
     const c = S.customers[a.cust]; if (!c) return '';
     const card = s.cards.find(k => k.id===a.card);
-    const what = a.type==='stamp' ? `got a stamp${card?' · '+esc(card.name):''}` : a.type==='reward' ? `unlocked a reward 🎉` : `redeemed a reward`;
+    const what = a.type==='stamp' ? `got a stamp${card?' · '+esc(card.name):''}` : a.type==='reward' ? `unlocked a reward 🎉`
+      : a.type==='request' ? `requested to redeem a reward` : a.type==='report' ? `reported a staff redemption ⚠️`
+      : a.method==='staff' ? `reward redeemed by staff (no phone)` : `redeemed a reward in the app`;
     return `<div class="row">${ava(c)}<div class="grow"><div class="t">${esc(c.name)}</div><div class="s">${what}</div></div><span class="s small muted">${ago(a.ts)}</span></div>`;
   }).join('');
   const risk = st.atRisk.slice(0,4).map(x => {
@@ -421,7 +442,8 @@ function ownerDash(s){
   }).join('');
   return `<div class="pad">
     <div style="margin:2px 2px 10px"><span class="chip">Sample data</span></div>
-    <div class="kpis">
+    ${requestsPanel(s)}
+    <div class="kpis" ${pendingOf(s.id).length ? 'style="margin-top:14px"' : ''}>
       <div class="kpi"><div class="v">${st.members}</div><div class="l">Loyalty members</div></div>
       <div class="kpi"><div class="v">${st.v30}</div><div class="l">Visits · last 30 days</div></div>
       <div class="kpi"><div class="v">${st.ret}%</div><div class="l">Active in last 30 days</div></div>
@@ -471,6 +493,7 @@ function ownerScan(s){
   const people = membersOf(s.id).map(m => S.customers[m.cust]).filter(Boolean)
     .sort((a,b) => lastVisit(s.id,b.id)-lastVisit(s.id,a.id)).slice(0,8);
   return `<div class="pad">
+    ${requestsPanel(s)}${pendingOf(s.id).length ? '<div style="height:14px"></div>' : ''}
     <div class="viewfinder"><div class="vf-box"><i></i><i></i><i></i><i></i><div class="vf-line"></div></div><div class="vf-text">Point at the customer's StampIt QR code</div></div>
     <h3 class="sec">Demo shortcut <span>who's at the counter?</span></h3>
     <div class="chips">${people.map(c => `<button class="pchip" data-act="cust" data-cust="${c.id}">${ava(c)}${esc(c.name.split(' ')[0])}</button>`).join('')}
@@ -488,8 +511,17 @@ function ownerSheet(s, sh){
         <button class="btn primary sm" data-act="stamp" data-card="${k.id}">${ic('plus','sm')} Stamp</button></div>
         <div class="bar"><i style="width:${n/k.goal*100}%"></i></div><div class="muted small">${n} of ${k.goal} stamps</div></div>`;
     }).join('') || `<p class="muted small">No active stamp cards. Create one in Stamp cards.</p>`;
-    const gifts = openRewards(s.id, c.id).map(r => `<div class="prog-row"><div class="top"><div><b>🎁 ${esc(r.text)}</b><div class="muted small">Earned ${ago(r.earned)}</div></div>
-      <button class="btn sm" data-act="redeem" data-reward="${r.id}">Redeem</button></div></div>`).join('');
+    const gifts = openRewards(s.id, c.id).map(r => {
+      const live = r.pending && r.pending.exp > Date.now();
+      return live
+        // Path A: customer already confirmed in their app; staff finalises.
+        ? `<div class="prog-row req-row"><div class="top"><div><b>🎁 ${esc(r.text)}</b>
+            <div class="small"><span class="tag gift">Requested in app</span> code <span class="code">${r.pending.code}</span> · ${countdown(r)}</div></div>
+            <button class="btn primary sm" data-act="confirm-redeem" data-reward="${r.id}">Confirm</button></div></div>`
+        // Waiting for the customer; Path B (manual) available only as a fallback.
+        : `<div class="prog-row"><div><b>🎁 ${esc(r.text)}</b><div class="muted small">Earned ${ago(r.earned)} · Ask ${esc(c.name.split(' ')[0])} to tap <b>Use reward</b> in the app</div></div>
+            <button class="linkbtn" data-act="manual-redeem" data-reward="${r.id}">No phone? Redeem manually</button></div>`;
+    }).join('');
     return `${shHead(esc(c.name), `${esc(c.phone)} · Member since ${monthYear(m.joined)}`, ava(c))}
       <p class="muted small" style="margin:-4px 0 12px">${visitCount(s.id,c.id)} visits · last visit ${ago(lastVisit(s.id,c.id))}</p>
       ${gifts ? `<h3 class="sec" style="margin-top:0">Rewards ready</h3>${gifts}` : ''}
@@ -516,6 +548,14 @@ function ownerSheet(s, sh){
         <label class="check"><input type="checkbox" name="active" ${!k || k.active ? 'checked' : ''}> Active (customers can collect stamps)</label>
         <div class="actions"><button type="button" class="btn" data-act="close">Cancel</button><button class="btn primary">${k?'Save':'Create card'}</button></div>
       </form>`;
+  }
+  if (sh.type==='manual') {
+    const r = S.rewards.find(x => x.id===sh.reward && !x.redeemed), c = r && S.customers[r.cust];
+    if (!r || !c) { ownerUI.sheet = null; return ''; }
+    return `${shHead('Redeem manually?', 'Fallback for customers without their phone')}
+      <div class="prog-row"><b>🎁 ${esc(r.text)}</b><div class="muted small">for ${esc(c.name)}</div></div>
+      <p class="small">Only use this if the customer can’t open the app. ${esc(c.name.split(' ')[0])} will get a notification and can report it if it wasn’t them.</p>
+      <div class="actions"><button class="btn" data-act="cust" data-cust="${c.id}">Back</button><button class="btn primary" data-act="manual-confirm" data-reward="${r.id}">Redeem for ${esc(c.name.split(' ')[0])}</button></div>`;
   }
   if (sh.type==='confirm') {
     const msg = sh.what==='card'
@@ -556,13 +596,19 @@ function custRewards(c){
   const open = mine.filter(r => !r.redeemed).sort((a,b) => b.earned-a.earned);
   const used = mine.filter(r => r.redeemed).sort((a,b) => b.redeemed-a.redeemed).slice(0,6);
   const row = (r, isOpen) => { const s = S.stores[r.store];
-    return `<${isOpen?'button':'div'} class="row" ${isOpen?`data-act="qr" data-store="${s.id}" data-reward="${r.id}"`:''}><span class="badge-ava" style="background:${s.soft}">${s.emoji}</span>
-      <div class="grow"><div class="t">${esc(r.text)}</div><div class="s">${esc(s.name)} · ${isOpen ? 'earned '+ago(r.earned) : 'used '+ago(r.redeemed)}</div></div>
-      ${isOpen ? '<span class="tag gift">Use</span>' : ''}</${isOpen?'button':'div'}>`; };
+    const live = isOpen && r.pending && r.pending.exp > Date.now();
+    const staff = !isOpen && r.method==='staff';
+    const right = isOpen ? (live ? `<span class="tag gift">Code active</span>` : `<span class="tag gift">Use</span>`)
+      : staff ? (r.reported ? `<span class="tag risk">Reported</span>` : `<button class="btn sm" data-act="report" data-reward="${r.id}">Not me?</button>`) : '';
+    const sub = isOpen ? (live ? `code expires in ${countdown(r)}` : 'earned '+ago(r.earned))
+      : `${staff ? 'redeemed by staff' : 'used in app'} · ${ago(r.redeemed)}`;
+    return `<${isOpen?'button':'div'} class="row" ${isOpen?`data-act="reward-open" data-reward="${r.id}"`:''}><span class="badge-ava" style="background:${s.soft}">${s.emoji}</span>
+      <div class="grow"><div class="t">${esc(r.text)}</div><div class="s">${esc(s.name)} · ${sub}</div></div>${right}</${isOpen?'button':'div'}>`; };
   return `<div class="pad">
     <h3 class="sec">Ready to use</h3>
     ${open.length ? `<div class="list">${open.map(r => row(r,true)).join('')}</div>` : `<div class="panel muted small">Keep collecting stamps. Rewards show up here.</div>`}
-    ${used.length ? `<h3 class="sec">Used</h3><div class="list" style="opacity:.75">${used.map(r => row(r,false)).join('')}</div>` : ''}
+    ${open.length ? `<p class="muted small" style="margin:8px 2px 0">Tap a reward when you’re at the counter. Staff confirm it before it’s used.</p>` : ''}
+    ${used.length ? `<h3 class="sec">Used</h3><div class="list">${used.map(r => row(r,false)).join('')}</div>` : ''}
   </div>`;
 }
 function custExplore(c){
@@ -594,13 +640,31 @@ function qrSVG(seedStr){
 function customerSheet(c, sh){
   if (sh.type==='qr') {
     const s = S.stores[sh.store]; if (!s) { custUI.sheet = null; return ''; }
-    const r = sh.reward && S.rewards.find(x => x.id===sh.reward && !x.redeemed);
     const code = 'SI-' + c.id.slice(0,4).toUpperCase() + '-' + String(hashStr(c.id)%9000+1000);
-    return `${shHead(esc(s.name), r ? 'Show this to redeem your reward' : 'Show this at the counter to collect a stamp', `<span class="badge-ava" style="background:${s.soft}">${s.emoji}</span>`)}
-      ${r ? `<div class="panel benefit center" style="--accent:var(--ok);background:#e7f4ec;margin-bottom:8px">🎁 <b>${esc(r.text)}</b></div>` : ''}
+    return `${shHead(esc(s.name), 'Show this at the counter to collect a stamp', `<span class="badge-ava" style="background:${s.soft}">${s.emoji}</span>`)}
       ${qrSVG(c.id + s.id)}
       <p class="center code">${code}</p>
       <p class="center muted small">${view.mode==='both' && !mq.matches ? `Demo tip: on the owner phone, open <b>Scan</b> and tap ${esc(c.name.split(' ')[0])}.` : 'The staff scans this code to add your stamp.'}</p>`;
+  }
+  if (sh.type==='useConfirm' || sh.type==='useCode' || sh.type==='used') {
+    const r = S.rewards.find(x => x.id===sh.reward), s = r && S.stores[r.store];
+    if (!r || !s) { custUI.sheet = null; return ''; }
+    const lead = `<span class="badge-ava" style="background:${s.soft}">${s.emoji}</span>`;
+    if (sh.type==='used') return `${shHead(esc(s.name), 'Reward redeemed', lead)}
+      <div class="center" style="padding:14px 0"><div style="font-size:52px">✅</div><h2 style="margin:6px 0">Enjoy your ${esc(r.text.toLowerCase())}!</h2>
+      <p class="muted small">Confirmed by staff · ${new Date(r.redeemed).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'})}</p></div>
+      <button class="btn primary block" data-act="close">Done</button>`;
+    if (sh.type==='useConfirm') return `${shHead('Use this reward?', esc(s.name), lead)}
+      <div class="prog-row"><b>🎁 ${esc(r.text)}</b><div class="muted small">Earned ${ago(r.earned)}</div></div>
+      <p class="small">Only tap <b>Use now</b> when you’re at the counter. You’ll get a code that’s valid for 10 minutes. The reward is used once staff confirm it.</p>
+      <div class="actions"><button class="btn" data-act="close">Not now</button><button class="btn primary" data-act="use-confirm" data-reward="${r.id}">Use now</button></div>`;
+    if (!r.pending || r.redeemed) { custUI.sheet = null; return ''; }
+    return `${shHead(esc(r.text), 'Show this to staff', lead)}
+      ${qrSVG('redeem' + r.id + r.pending.code)}
+      <p class="center code" style="font-size:22px;margin:0">${r.pending.code}</p>
+      <p class="center small" style="margin:6px 0 14px"><span class="tag gift">Waiting for staff to confirm</span> · expires in ${countdown(r)}</p>
+      <p class="center muted small">${view.mode==='both' && !mq.matches ? 'Demo tip: the request now shows on the owner phone. Tap <b>Confirm</b> there.' : 'If the code expires, your reward stays in your wallet.'}</p>
+      <button class="btn block" data-act="use-cancel" data-reward="${r.id}">Cancel request</button>`;
   }
   if (sh.type==='leave') {
     const s = S.stores[sh.store];
@@ -658,7 +722,7 @@ function syncBar(){
   $('#custField').hidden = mode==='owner';
   const first = esc(S.customers[view.cust].name.split(' ')[0]);
   $('#hint').innerHTML = mode==='both'
-    ? `Try it: on the owner phone tap <b>Scan</b> → <b>${first}</b> → <b>+ Stamp</b>, and watch ${first}’s card fill up on the right.`
+    ? `Try it: owner taps <b>Scan</b> → <b>${first}</b> → <b>+ Stamp</b> until a reward unlocks. Then ${first} taps <b>Rewards</b> → <b>Use now</b>, and the owner taps <b>Confirm</b>.`
     : mode==='owner' ? `You’re viewing the store owner app. Switch stores above. Each store gets its own private space on one platform.`
     : `You’re viewing the customer app. One wallet holds stamp cards from every local store the customer joins.`;
   const h = hashFor(); if (location.hash !== h) history.replaceState(null, '', h);
@@ -673,8 +737,13 @@ function toast(role, text){
   setTimeout(() => t.classList.add('out'), 2200); setTimeout(() => t.remove(), 2600);
 }
 function banner(cust, store, title, text){
-  if (view.cust !== cust) return;
-  const o = overlayOf('customer'); if (!o) return;
+  if (view.cust === cust) showBanner('customer', store, title, text);
+}
+function ownerBanner(store, title, text){
+  if (view.store === store.id) showBanner('owner', store, title, text);
+}
+function showBanner(role, store, title, text){
+  const o = overlayOf(role); if (!o) return;
   o.querySelectorAll('.banner').forEach(b => b.remove());
   const b = document.createElement('div'); b.className = 'banner';
   b.innerHTML = `<span class="badge-ava" style="background:${store.soft}">${store.emoji}</span><div><div class="t">${esc(title)}</div><div class="s">${esc(text)}</div></div>`;
@@ -758,13 +827,28 @@ $('#stage').addEventListener('click', e => {
       break;
     }
     case 'stamp': addStamp(s.id, ui.sheet.cust, d.card); break;
-    case 'redeem': {
-      const r = S.rewards.find(x => x.id===d.reward); if (!r) break;
-      r.redeemed = Date.now();
-      S.activity.push({id:uid('a'), store:r.store, cust:r.cust, card:r.card, type:'redeem', ts:r.redeemed});
-      if (custUI.sheet?.reward === r.id) custUI.sheet = null;
-      commit(); toast('owner', `Redeemed: ${r.text}`);
-      banner(r.cust, S.stores[r.store], `${S.stores[r.store].name}`, `Enjoy your ${r.text.toLowerCase()}! Thanks for coming back.`);
+    // Path A, step 2: staff confirm a request the customer started in the app.
+    case 'confirm-redeem': {
+      const r = S.rewards.find(x => x.id===d.reward);
+      if (!r || r.redeemed || !r.pending || r.pending.exp <= Date.now()) { toast('owner', 'This code has expired'); renderAll(); break; }
+      r.redeemed = Date.now(); r.method = 'app'; r.pending = null;
+      S.activity.push({id:uid('a'), store:r.store, cust:r.cust, card:r.card, type:'redeem', method:'app', ts:r.redeemed});
+      if (view.cust === r.cust && custUI.sheet?.reward === r.id) custUI.sheet = {type:'used', reward:r.id};
+      commit(); toast('owner', `✓ Redeemed: ${r.text}`);
+      banner(r.cust, S.stores[r.store], S.stores[r.store].name, `Enjoy your ${r.text.toLowerCase()}! Thanks for coming back.`);
+      if (view.cust === r.cust) confetti('customer');
+      break;
+    }
+    // Path B: manual fallback when the customer has no phone.
+    case 'manual-redeem': ui.sheet = {type:'manual', reward:d.reward}; renderAll(); break;
+    case 'manual-confirm': {
+      const r = S.rewards.find(x => x.id===d.reward); if (!r || r.redeemed) break;
+      const c = S.customers[r.cust], st = S.stores[r.store];
+      r.redeemed = Date.now(); r.method = 'staff'; r.pending = null;
+      S.activity.push({id:uid('a'), store:r.store, cust:r.cust, card:r.card, type:'redeem', method:'staff', ts:r.redeemed});
+      ui.sheet = {type:'cust', cust:r.cust};
+      commit(); toast('owner', `Redeemed manually · ${c.name.split(' ')[0]} notified`);
+      banner(r.cust, st, `${st.name} · Reward redeemed by staff`, `${r.text}. Not you? Tap “Not me?” in Rewards.`);
       break;
     }
     case 'nudge': {
@@ -775,6 +859,33 @@ $('#stage').addEventListener('click', e => {
     }
     // customer
     case 'qr': openSheet(ui, {type:'qr', store:d.store, reward:d.reward||null}); renderAll(); break;
+    // Path A, step 1: customer chooses to use a reward and gets a short-lived code.
+    case 'reward-open': {
+      const r = S.rewards.find(x => x.id===d.reward); if (!r) break;
+      openSheet(ui, {type: r.pending && r.pending.exp > Date.now() ? 'useCode' : 'useConfirm', reward:r.id}); renderAll(); break;
+    }
+    case 'use-confirm': {
+      const r = S.rewards.find(x => x.id===d.reward); if (!r || r.redeemed) break;
+      r.pending = {code:String(Math.floor(100000 + Math.random()*900000)), exp:Date.now() + REDEEM_MS};
+      S.activity.push({id:uid('a'), store:r.store, cust:r.cust, card:r.card, type:'request', ts:Date.now()});
+      ui.sheet = {type:'useCode', reward:r.id};
+      commit();
+      ownerBanner(S.stores[r.store], `Redeem request · ${S.customers[r.cust].name}`, `${r.text}. Code ${r.pending.code}`);
+      break;
+    }
+    case 'use-cancel': {
+      const r = S.rewards.find(x => x.id===d.reward); if (r) r.pending = null;
+      ui.sheet = null; commit(); toast('customer', 'Request cancelled. Your reward is still available.');
+      break;
+    }
+    case 'report': {
+      const r = S.rewards.find(x => x.id===d.reward); if (!r) break;
+      r.reported = true;
+      S.activity.push({id:uid('a'), store:r.store, cust:r.cust, card:r.card, type:'report', ts:Date.now()});
+      commit(); toast('customer', `Reported to ${S.stores[r.store].name}. They’ll follow up.`);
+      ownerBanner(S.stores[r.store], `⚠️ ${S.customers[r.cust].name} reported a redemption`, `“${r.text}” was redeemed by staff without the app.`);
+      break;
+    }
     case 'join': {
       S.members.push({store:d.store, cust:view.cust, joined:Date.now(), stamps:{}});
       S.activity.push({id:uid('a'), store:d.store, cust:view.cust, type:'join', ts:Date.now()});
@@ -846,6 +957,18 @@ document.addEventListener('click', e => {
 addEventListener('hashchange', () => { readHash(); buildStage(); });
 mq.addEventListener('change', buildStage);
 addEventListener('storage', e => { if (e.key===KEY) { S = load() || seed(); renderAll(); } });
+
+// Countdown for redeem codes; expired requests fall back to "available".
+setInterval(() => {
+  const now = Date.now();
+  document.querySelectorAll('[data-exp]').forEach(el => el.textContent = mmss(+el.dataset.exp - now));
+  const expired = S.rewards.filter(r => !r.redeemed && r.pending && r.pending.exp <= now);
+  if (!expired.length) return;
+  expired.forEach(r => r.pending = null);
+  if (expired.some(r => r.cust===view.cust && custUI.sheet?.reward===r.id)) {
+    custUI.sheet = null; commit(); toast('customer', 'Code expired. Your reward is still available.');
+  } else commit();
+}, 1000);
 
 readHash();
 buildStage();
